@@ -11,12 +11,20 @@ use windows::Win32::{
     },
 };
 
-fn process_name(buf: &[u16]) -> String {
-    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+const EXPLORER: &[u8] = b"explorer.exe";
 
-    String::from_utf16_lossy(&buf[..end])
+fn is_explorer(buf: &[u16]) -> bool {
+    let name = buf.split(|&c| c == 0).next().unwrap_or(buf);
+    name.len() == EXPLORER.len()
+        && name.iter().zip(EXPLORER).all(|(&wide, &ascii)| {
+            let lower = if (b'A' as u16..=b'Z' as u16).contains(&wide) {
+                wide + 32
+            } else {
+                wide
+            };
+            lower == ascii as u16
+        })
 }
-
 fn has_explorer() -> Result<bool, Box<dyn std::error::Error>> {
     unsafe {
         let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)?;
@@ -24,14 +32,11 @@ fn has_explorer() -> Result<bool, Box<dyn std::error::Error>> {
             dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
             ..Default::default()
         };
-        let mut has = false;
         if Process32FirstW(snapshot, &mut pe32).is_ok() {
             loop {
-                let name = process_name(&pe32.szExeFile);
-
-                if name.eq_ignore_ascii_case("explorer.exe") {
-                    has = true;
-                    break;
+                if is_explorer(&pe32.szExeFile) {
+                    CloseHandle(snapshot)?;
+                    return Ok(true);
                 }
 
                 if Process32NextW(snapshot, &mut pe32).is_err() {
@@ -40,7 +45,7 @@ fn has_explorer() -> Result<bool, Box<dyn std::error::Error>> {
             }
         }
         CloseHandle(snapshot)?;
-        Ok(has)
+        Ok(false)
     }
 }
 fn get_reopen_folder() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -53,7 +58,7 @@ fn get_reopen_folder() -> Result<PathBuf, Box<dyn std::error::Error>> {
         .join("Programs")
         .join("Startup"))
 }
-fn create_auto_reopen(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn create_auto_reopen(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let sl = ShellLink::new(path)?;
 
     let link = get_reopen_folder()?.join("rexplorer.lnk");
@@ -81,16 +86,18 @@ fn move_to_work_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
 // TODO
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let file = get_reopen_folder()?.join("rexplorer.lnk");
-    if !file.try_exists()? {
-        let exe_path = move_to_work_dir()?;
-        create_auto_reopen(exe_path)?;
+    let exe_path = move_to_work_dir()?;
+    let link = get_reopen_folder()?.join("rexplorer.lnk");
+
+    if !link.try_exists()? {
+        create_auto_reopen(&exe_path)?;
     }
+
     loop {
-        let has = has_explorer()?;
-        if !has {
+        if !has_explorer()? {
             std::process::Command::new("explorer.exe").spawn()?;
         }
+
         std::thread::sleep(std::time::Duration::from_secs(10));
     }
 }
