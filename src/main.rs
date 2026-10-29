@@ -1,6 +1,6 @@
 #![windows_subsystem = "windows"]
 
-use std::path::PathBuf;
+use std::{env, path::PathBuf};
 
 use mslnk::ShellLink;
 use windows::Win32::{
@@ -44,8 +44,7 @@ fn has_explorer() -> Result<bool, Box<dyn std::error::Error>> {
     }
 }
 fn get_reopen_folder() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let appdata = std::env::var_os("APPDATA")
-        .ok_or("APPDATA is not set")?;
+    let appdata = std::env::var_os("APPDATA").ok_or("APPDATA is not set")?;
 
     Ok(PathBuf::from(appdata)
         .join("Microsoft")
@@ -54,9 +53,8 @@ fn get_reopen_folder() -> Result<PathBuf, Box<dyn std::error::Error>> {
         .join("Programs")
         .join("Startup"))
 }
-fn create_auto_reopen() -> Result<(), Box<dyn std::error::Error>> {
-    let current_exe = std::env::current_exe()?;
-    let sl = ShellLink::new(current_exe)?;
+fn create_auto_reopen(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let sl = ShellLink::new(path)?;
 
     let link = get_reopen_folder()?.join("rexplorer.lnk");
 
@@ -65,11 +63,28 @@ fn create_auto_reopen() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+fn move_to_work_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let local_appdata = std::env::var_os("LOCALAPPDATA").ok_or("LOCALAPPDATA is not set")?;
+    let path = PathBuf::from(local_appdata).join("Rexplorer");
+    std::fs::create_dir_all(&path)?;
+
+    let target = path.join("rexplorer.exe");
+    let current = env::current_exe()?;
+
+    if current != target {
+        std::fs::copy(current, &target)?;
+    }
+
+    Ok(target)
+}
+
+// TODO
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file = get_reopen_folder()?.join("rexplorer.lnk");
     if !file.try_exists()? {
-        create_auto_reopen()?;
+        let exe_path = move_to_work_dir()?;
+        create_auto_reopen(exe_path)?;
     }
     loop {
         let has = has_explorer()?;
